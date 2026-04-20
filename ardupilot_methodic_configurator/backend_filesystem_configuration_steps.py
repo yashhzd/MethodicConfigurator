@@ -160,7 +160,7 @@ class ConfigurationSteps:
                         parameter,
                     )
 
-    def compute_parameters(  # pylint: disable=too-many-branches, too-many-arguments, too-many-positional-arguments, too-many-locals, too-many-nested-blocks
+    def compute_parameters(  # noqa: PLR0915  # pylint: disable=too-many-branches, too-many-arguments, too-many-positional-arguments, too-many-locals, too-many-nested-blocks, too-many-statements
         self,
         filename: str,
         file_info: dict,
@@ -201,21 +201,11 @@ class ConfigurationSteps:
                     log_parameter_error(parameter_type, ignore_fc_derived_param_warnings, errors, error_msg)
                     continue
 
-                try:
-                    result = safe_evaluate(str(parameter_info["New Value"]), variables)
-                except ConfigurationStepEvalError as _eval_err:
-                    # safe_evaluate wraps the full exception surface (malformed
-                    # expression, undefined name, missing dict key, math error,
-                    # type mismatch, overflow) into a single domain exception so
-                    # the error can be surfaced here with useful diagnostics
-                    # without crashing the configuration-step load.
-                    error_msg = _(
-                        "In file '{self.configuration_steps_filename}': '{filename}' {parameter_type} "
-                        "parameter '{parameter}' could not be evaluated: {_eval_err}"
-                    )
-                    error_msg = error_msg.format(**locals())
-                    log_parameter_error(parameter_type, ignore_fc_derived_param_warnings, errors, error_msg)
-                    continue
+                # safe_evaluate wraps the full expression-time exception surface
+                # (malformed expression, undefined name, missing dict key, math
+                # error, type mismatch, overflow) into a single domain exception
+                # so the outer handler sees one evaluation error type.
+                result = safe_evaluate(str(parameter_info["New Value"]), variables)
 
                 # convert (combobox) string text to (parameter value) string int or float
                 if isinstance(result, str):
@@ -245,11 +235,34 @@ class ConfigurationSteps:
                     log_parameter_error(parameter_type, ignore_fc_derived_param_warnings, errors, error_msg)
                     continue
 
+                # Final float() conversion is part of evaluating the parameter;
+                # fold its failure into ConfigurationStepEvalError so it follows
+                # the same user-facing error path as expression evaluation.
+                try:
+                    numeric_value = float(result)
+                except (ValueError, TypeError) as _conv_err:
+                    conv_msg = f"{type(_conv_err).__name__}: {_conv_err}"
+                    raise ConfigurationStepEvalError(conv_msg) from _conv_err
+
                 if filename not in destination:
                     destination[filename] = ParDict()
                 change_reason = _(parameter_info["Change Reason"]) if parameter_info["Change Reason"] else ""
-                destination[filename][parameter] = Par(float(result), change_reason)
-            except (SyntaxError, NameError, KeyError, StopIteration, ValueError, TypeError) as _e:
+                destination[filename][parameter] = Par(numeric_value, change_reason)
+            except ConfigurationStepEvalError as _eval_err:
+                # Unified handler for every evaluation-related failure: the
+                # wrapped expression-time errors from safe_evaluate plus the
+                # float() conversion of the final result.
+                error_msg = _(
+                    "In file '{self.configuration_steps_filename}': '{filename}' {parameter_type} "
+                    "parameter '{parameter}' could not be evaluated: {_eval_err}"
+                )
+                error_msg = error_msg.format(**locals())
+                log_parameter_error(parameter_type, ignore_fc_derived_param_warnings, errors, error_msg)
+            except (KeyError, StopIteration) as _e:
+                # Non-evaluation failures:
+                # - KeyError: doc_dict entry missing 'values' or 'Bitmask' subkey
+                # - StopIteration: no matching entry when resolving a result string
+                #   against doc_dict values / Bitmask
                 error_msg = _(
                     "In file '{self.configuration_steps_filename}': '{filename}' {parameter_type} "
                     "parameter '{parameter}' could not be computed: {_e}"

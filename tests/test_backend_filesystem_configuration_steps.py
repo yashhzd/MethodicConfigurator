@@ -121,6 +121,16 @@ class TestConfigurationSteps(unittest.TestCase):
         assert "could not be evaluated" in result
         assert "TypeError" in result
 
+    def test_compute_parameters_with_non_numeric_result(self) -> None:
+        """A non-numeric string result that float() can't convert is wrapped as an evaluation error."""
+        # Expression returns a string literal; doc_dict has empty values and
+        # Bitmask so the string passes through unchanged and reaches float().
+        file_info = {"forced_parameters": {"PARAM1": {"New Value": "'abc'", "Change Reason": "Test"}}}
+        variables: dict[str, dict] = {"doc_dict": {"PARAM1": {"values": {}, "Bitmask": {}}}}
+        result = self.config_steps.compute_parameters("test_file", file_info, "forced", variables)
+        assert "could not be evaluated" in result
+        assert "ValueError" in result
+
     def test_compute_parameters_with_missing_doc_dict(self) -> None:
         file_info = {"forced_parameters": {"PARAM1": {"New Value": "10", "Change Reason": "Test reason"}}}
         variables: dict[str, dict] = {}
